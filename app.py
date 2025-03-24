@@ -1,7 +1,7 @@
 import streamlit as st
 import os
+import pandas as pd
 from langchain_groq import ChatGroq
-from langchain_community.document_loaders import WebBaseLoader
 from langchain.embeddings import OllamaEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -13,49 +13,59 @@ import time
 from dotenv import load_dotenv
 load_dotenv()
 
-## load the Groq API key
-groq_api_key=os.environ['GROQ_API_KEY']
+## Load the Groq API key
+groq_api_key = os.environ['GROQ_API_KEY']
 
-if "vector" not in st.session_state:
-    st.session_state.embeddings=OllamaEmbeddings()
-    st.session_state.loader=WebBaseLoader("https://docs.smith.langchain.com/")
-    st.session_state.docs=st.session_state.loader.load()
+st.title("Custom Data Chatbot")
 
-    st.session_state.text_splitter=RecursiveCharacterTextSplitter(chunk_size=500,chunk_overlap=100)
-    st.session_state.final_documents=st.session_state.text_splitter.split_documents(st.session_state.docs[:20])
-    st.session_state.vectors=FAISS.from_documents(st.session_state.final_documents,st.session_state.embeddings)
+# Upload CSV or Excel file through Streamlit
+uploaded_file = st.file_uploader("responses.csv", type=["csv", "xlsx"])
 
-st.title("ChatGroq Demo")
-llm=ChatGroq(groq_api_key=groq_api_key,
-             model_name="llama2-7b")
-
-prompt=ChatPromptTemplate.from_template(
-"""
-Answer the questions based on the provided context only.
-Please provide the most accurate response based on the question
-<context>
-{context}
-<context>
-Questions:{input}
-
-"""
-)
-document_chain = create_stuff_documents_chain(llm, prompt)
-retriever = st.session_state.vectors.as_retriever()
-retrieval_chain = create_retrieval_chain(retriever, document_chain)
-
-prompt=st.text_input("Input you prompt here")
-
-if prompt:
-    start=time.process_time()
-    response=retrieval_chain.invoke({"input":prompt})
-    print("Response time :",time.process_time()-start)
-    st.write(response['answer'])
-
-    # With a streamlit expander
-    with st.expander("Document Similarity Search"):
-        # Find the relevant chunks
-        for i, doc in enumerate(response["context"]):
-            st.write(doc.page_content)
-            st.write("--------------------------------")
+if uploaded_file is not None:
+    # Load the data
+    file_extension = uploaded_file.name.split(".")[-1]
     
+    if file_extension == "csv":
+        df = pd.read_csv(uploaded_file)
+    elif file_extension == "xlsx":
+        df = pd.read_excel(uploaded_file)
+
+    # Convert dataframe to text format for processing
+    data_text = df.to_string()
+
+    # Create embeddings from the data
+    embeddings = OllamaEmbeddings()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    final_documents = text_splitter.create_documents([data_text])
+    vectors = FAISS.from_documents(final_documents, embeddings)
+
+    # Setup LLM
+    llm = ChatGroq(groq_api_key=groq_api_key, model_name="llama2-7b")
+
+    prompt = ChatPromptTemplate.from_template("""
+    Answer the questions based on the provided context only.
+    Please provide the most accurate response based on the question.
+    <context>
+    {context}
+    <context>
+    Question: {input}
+    """)
+
+    document_chain = create_stuff_documents_chain(llm, prompt)
+    retriever = vectors.as_retriever()
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+
+    # Take user input
+    prompt = st.text_input("Input your prompt here")
+
+    if prompt:
+        start = time.process_time()
+        response = retrieval_chain.invoke({"input": prompt})
+        print("Response time:", time.process_time() - start)
+        st.write(response['answer'])
+
+        # Show retrieved documents for reference
+        with st.expander("Document Similarity Search"):
+            for i, doc in enumerate(response["context"]):
+                st.write(doc.page_content)
+                st.write("--------------------------------")
